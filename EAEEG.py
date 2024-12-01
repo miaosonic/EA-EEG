@@ -17,12 +17,26 @@ class Conv1(nn.Module):
     def forward(self, x):
         out = self.act(self.norm(self.conv(x)))
         return out
+class WindowPool(nn.Module):
+    def __init__(self, kernel_size=2, stride=2):
+        super(WindowPool, self).__init__()
+        self.pool = nn.Conv1d(in_channels=1, out_channels=2, kernel_size=kernel_size, stride=stride, groups=1)
+    def forward(self, x):
+        B, C, T = x.size()
+        # 通过滑动窗口池化进行时间维度的压缩
+        x = rearrange(x, 'b c t ->( b c) 1 t')  # 转换为适应 Conv1d 输入格式
+        out = self.pool(x)
+ #       B, C, T = out.size()
+        x = rearrange(out, "(b c) h t ->b (h c) t",b=B)  # 转换为适应 Conv1d 输入格式
+        x = rearrange(x, "b  (h c) t ->b  c (h t)",c = C)  # 转换为适应 Conv1d 输入格式
+        return x
 class Conv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=1, dilation=1, groups=1, bias=True):
         super(Conv, self).__init__()
         self.padding = dilation * (kernel_size - 1) // 2
         self.conv = nn.Conv1d(1, out_channels, kernel_size, dilation=dilation, padding=self.padding, groups=groups,
                               bias=bias)
+        self.window = WindowPool()
         # 权重初始化
         nn.init.kaiming_normal_(self.conv.weight)
         # 如果使用偏置，则初始化偏置为常数0
@@ -35,24 +49,15 @@ class Conv(nn.Module):
         self.act = nn.ELU()
     def forward(self, x):
         B, C, T = x.size()
+        x0 = self.window(x)
+        x =x0+x
         x = rearrange(x, "b (h c) t ->(b c) h t", h=1)
         # 卷积 -> 批归一化 -> 激活
         out = self.act(self.norm(self.conv(x)))
         # 调整输出形状
         out = rearrange(out, "(b c) h t ->b (h c) t", b=B)
         return out
-class normalize_eeg_zscore(nn.Module):
-    """
-    对EEG信号进行Z-score归一化
-    输入: eeg_data, 形状为 [B, C, T]
-    """
-    def __init__(self, ):
-        super(normalize_eeg_zscore, self).__init__()
-    def forward(self, eeg_data):
-        mean = eeg_data.mean(dim=-1, keepdim=True)  # 计算每个通道的均值
-        std = eeg_data.std(dim=-1, keepdim=True)  # 计算每个通道的标准差
-        eeg_data_norm = (eeg_data - mean) / (std + 1e-6)  # 进行Z-score归一化，避免除以0
-        return eeg_data_norm
+
 class MultiScalePooling(nn.Module):
     def __init__(self,in_channels, pool_kernels=[75, 115, 155]):
         super(MultiScalePooling, self).__init__()
@@ -65,9 +70,9 @@ class MultiScalePooling(nn.Module):
     def forward(self, x):
         pooled_outputs = [pool(x) for pool in self.pool_layers]
         # 拼接池化后的结果
-        concatenated = torch.cat(pooled_outputs, dim=1)
-        output = concatenated
-        return output
+  #      concatenated = torch.cat(pooled_outputs, dim=1)
+  #      output = concatenated
+        return pooled_outputs[0],pooled_outputs[1],pooled_outputs[2]
 class GeMP1D(nn.Module):
     def __init__(self, p=4., eps=1e-6, learn_p=False,num_channels=22, epsilon=1e-5):
         super().__init__()
@@ -110,111 +115,56 @@ class RMSPool1D(nn.Module):
         square_mean = F.avg_pool1d(x**2, self.kernel_size, self.stride, self.padding)
         rms = torch.sqrt(square_mean)
         return rms
-class SequencePooling(nn.Module):
-    def __init__(self, in_features):
-        super(SequencePooling, self).__init__()
-        self.attention = nn.Linear(in_features, out_features=1)
-        self.apply(self.init_weight)
-    def forward(self, x):
-        attention_weights = F.softmax(self.attention(x), dim=1)
-        attention_weights = torch.transpose(attention_weights, 1, 2)
-        weighted_representation = torch.matmul(attention_weights, x)
-        return torch.squeeze(weighted_representation, dim=-2)
-    @staticmethod
-    def init_weight(m):
-      if isinstance(m, nn.Linear):
-        nn.init.trunc_normal_(m.weight, std=0.1)
-        nn.init.constant_(m.bias,0)
-class SMixer1D(nn.Module):
-    def __init__(self, dim, kernel_sizes=[5, 10, 25]):
+class RMSfusion(nn.Module):
+    def __init__(self, kernel_sizes=[5, 10, 25]):
         super().__init__()
         # 使用多个不同大小的核进行池化操作，这些核的大小在初始化时被指定
-        self.var_layers = nn.ModuleList()  # 存储多个池化层
+        self.RMS_layers = nn.ModuleList()  # 存储多个池化层
         self.L = len(kernel_sizes)  # 核的数量
         for k in kernel_sizes:
             # 为每个核大小创建一个池化层序列，包括自定义的 VarPool1D 和 Flatten 操作
-            self.var_layers.append(
+            self.RMS_layers.append(
                 nn.Sequential(
                     RMSPool1D(kernel_size=k, stride=int(k / 2)),  # 池化层
                     nn.Flatten(start_dim=1),  # 扁平化层，从第一个维度开始
                 )
             )
-    def forward(self, x):
-        B, d, L = x.shape  # 获取输入的批量大小(B)、特征维度(d)、长度(L)
-        # 将输入沿着特征维度 `d` 分成 `L` 份，每一份的大小为 d // self.L
-        x_split = torch.split(x, d // self.L, dim=1)
-        out = []  # 存储每个核处理后的结果
-        for i in range(len(x_split)):
-            # 使用对应的池化层对分割后的输入进行处理
-            x = self.var_layers[i](x_split[i])
-            out.append(x)
+    def forward(self, x,x1,x2):
+        out = []
+        x = self.RMS_layers[0](x)
+        out.append(x)
+        x1 = self.RMS_layers[1](x1)
+        out.append(x1)
+        x2 = self.RMS_layers[2](x2)
+        out.append(x2)
         # 将处理后的结果在特征维度上拼接起来
         y = torch.concat(out, dim=1)
         return y  # 返回拼接后的结果
-class VarPoold(nn.Module):
-    def __init__(self, kernel_size, stride):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-    def forward(self, x):
-        t = x.shape[2]
-        out_shape = (t - self.kernel_size) // self.stride + 1
-        out = []
-        for i in range(out_shape):
-            index = i*self.stride
-            input = x[:, :, index:index+self.kernel_size]
-            output = torch.log(torch.clamp(input.var(dim=-1, keepdim=True), 1e-6, 1e6))
-            out.append(output)
-        out = torch.cat(out, dim=-1)
-        return out
-class Efficient_Encoder(nn.Module):
+class EAEEG_Encoder(nn.Module):
     def __init__(
         self,
-        samples,
-        chans,
-        F1=16,
-        F2=36,
-        time_kernel1=75,
+        middle_channel=47,
+        multiple=9,
         pool_kernels=[50, 100, 250],
     ):
         super().__init__()
-        self.pool = MultiScalePooling(in_channels=48)
-        self.conv = Conv(in_channels=22, out_channels=9,kernel_size=75)
-        self.conv3 = Conv(in_channels=48,out_channels=3,kernel_size=1)
-        self.conv1 = Conv1(in_channels=198, out_channels=48,kernel_size=1)
-        self.norm = normalize_eeg_zscore()
+        self.pool = MultiScalePooling(in_channels=middle_channel)
+        self.conv = Conv(in_channels=22, out_channels=multiple,kernel_size=75)
+        self.conv1 = Conv1(in_channels=198, out_channels=middle_channel,kernel_size=1)
         self.GeMP1D =GeMP1D(num_channels=198)
-        self.belt = nn.Parameter(torch.ones(1, 198, 1))
-        self.fftmix = SMixer1D(dim=F2, kernel_sizes=pool_kernels)
-        self.lazynorm = LayerNorm(features=(1, 198, 1))
-        self.sp = SequencePooling(in_features=500)
-        self.max =  nn.AvgPool1d(kernel_size=2, stride=2)
-        self.var = VarPoold(kernel_size=1000,stride=1)
+        self.fftmix = RMSfusion(kernel_sizes=pool_kernels)
     def forward(self, x):
         # 数据预处理和归一化
-        x = self.norm(x) # 使用 x0 作为权重调节 x
         x = self.conv(x)
         out_mean = torch.mean(x, 2, True)
         out_var = torch.mean(x ** 2, 2, True)
         x = (x - out_mean) / torch.sqrt(out_var + 1e-5)
         x = self.GeMP1D(x)
         # 特征提取
-        x = self.lazynorm(x)
         x = self.conv1(x)
-        x = self.pool(x)
-        x = self.fftmix(x)
+        x,x1,x2 = self.pool(x)
+        x = self.fftmix(x,x1,x2)
         return x
-class LayerNorm(nn.Module):
-    "Construct a layernorm module."
-    def __init__(self, features, eps=1e-6):
-        super(LayerNorm, self).__init__()
-        self.a_2 = nn.Parameter(torch.ones(features))
-        self.b_2 = nn.Parameter(torch.zeros(features))
-        self.eps = eps
-    def forward(self, x):
-        mean = x.mean(-1, keepdim=True)
-        std = x.std(-1, keepdim=True)
-        return self.a_2 * (x - mean) / (std + self.eps) + self.b_2
 class Pooling1D(nn.Module):
     """
     PoolFormer池化操作的实现，已修改为适用于 [B, C, T] 输入（EEG信号）
@@ -233,20 +183,16 @@ class EAEEG(nn.Module):
         self,
         chans,           # 输入信号的通道数（如EEG信号的电极数）
         samples,         # 输入信号的采样点数（如EEG每个通道的时间点数）
-        num_classes=4,   # 类别数量（分类任务的输出类别数）
-        F1=9,            # 第一个卷积层的过滤器数量
-        F2=48,           # 第二个卷积层的过滤器数量
-        time_kernel1=75, # 时间卷积核的大小
+        multiple = 9,
+        middle_channel = 47,
+        num_classes=4,
         pool_kernels=[50, 100, 200],  # 池化层的核大小列表
     ):
         super().__init__()
         # 创建编码器（Efficient_Encoder），用于提取特征
-        self.encoder = Efficient_Encoder(
-            samples=samples,
-            chans=chans,
-            F1=F1,
-            F2=F2,
-            time_kernel1=time_kernel1,
+        self.encoder = EAEEG_Encoder(
+            middle_channel=middle_channel,
+            multiple=multiple,
             pool_kernels=pool_kernels,
         )
         self.features = None  # 用于存储特征
@@ -280,7 +226,7 @@ class EAEEG(nn.Module):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # a simple test
-    model = EAEEG(chans=22, samples=1000, num_classes=4)
+    model = EAEEG(chans=22, samples=1000, num_classes=4,middle_channel = 47)
     model = model.to(device)
     inp = torch.rand(10, 22, 1000).to(device)
     out = model(inp).to(device)
