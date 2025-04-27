@@ -199,26 +199,29 @@ class ExP():
 
     def EA_train(self, x):
         # 训练阶段的白化处理（和您之前的实现一样）
-        print("EA  train begin\n")
         num_samples, num_channels, num_time_points = x.shape
         cov = np.zeros((num_samples, num_channels, num_channels))
         target_mean = np.mean(x)
         # 计算每个样本的协方差矩阵
         for i in range(num_samples):
             cov[i] = np.cov(x[i])
+
         # 计算整体样本的平均协方差矩阵
         refEA = np.mean(cov, axis=0)
+
         # 为提高稳定性，添加小的正则化项
         epsilon = 1e-5
         refEA += epsilon * np.eye(num_channels)
+
         # 计算参考协方差矩阵的逆平方根
         sqrtRefEA = fractional_matrix_power(refEA, -0.5)
+
         # 对数据进行白化
         XEA = np.zeros_like(x)
         for i in range(num_samples):
             XEA[i] = np.dot(sqrtRefEA, x[i])
 
-        return XEA, refEA, target_mean
+        return XEA, sqrtRefEA , target_mean
 
     def EA_test_with(self, samples, cov_matrix, mean):
         """
@@ -231,22 +234,16 @@ class ExP():
         Returns:
         - whitened_samples: 白化后的信号样本批次 (shape: [batch_size, channels, time_points])
         """
-        print("EA  test begin\n")
+
         batch_size = samples.shape[0]
         whitened_samples = np.zeros_like(samples)  # 初始化一个与输入样本形状相同的空数组，用于存储白化后的样本
 
         for i in range(batch_size):
             sample = samples[i]  # 取出当前批次中的第i个样本
+
             # 中心化
             centered_sample = sample - mean  # 对每个样本减去训练集均值
-            # 计算协方差矩阵的逆平方根 (正则化以避免数值问题)
-            try:
-                # 使用奇异值分解(SVD)计算逆平方根
-                U, S, Vt = np.linalg.svd(cov_matrix + 1e-5 * np.eye(cov_matrix.shape[0]), full_matrices=False)
-                whitening_matrix = np.dot(U, np.dot(np.diag(1.0 / np.sqrt(S + 1e-5)), Vt))
-            except np.linalg.LinAlgError:
-                # 如果协方差矩阵不正定或存在其他数值问题，可以使用替代方法或返回原样本
-                whitening_matrix = np.eye(cov_matrix.shape[0])  # 使用单位矩阵作为备用
+            whitening_matrix = cov_matrix
             # 白化操作
             whitened_sample = np.dot(whitening_matrix, centered_sample)
 
