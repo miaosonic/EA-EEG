@@ -244,6 +244,13 @@ class ExP():
             # 中心化
             centered_sample = sample - mean  # 对每个样本减去训练集均值
             whitening_matrix = cov_matrix
+#           try:
+ #               # 使用奇异值分解(SVD)计算逆平方根
+ #               U, S, Vt = np.linalg.svd(cov_matrix + 1e-5 * np.eye(cov_matrix.shape[0]), full_matrices=False)
+ #               whitening_matrix = np.dot(U, np.dot(np.diag(1.0 / np.sqrt(S + 1e-5)), Vt))
+ #           except np.linalg.LinAlgError:
+ #               # 如果协方差矩阵不正定或存在其他数值问题，可以使用替代方法或返回原样本
+#                whitening_matrix = np.eye(cov_matrix.shape[0])  # 使用单位矩阵作为备用
             # 白化操作
             whitened_sample = np.dot(whitening_matrix, centered_sample)
 
