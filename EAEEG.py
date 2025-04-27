@@ -59,14 +59,13 @@ class Conv(nn.Module):
         return out
 
 class MultiScalePooling(nn.Module):
-    def __init__(self,in_channels, pool_kernels=[75, 115, 155]):
+    def __init__(self, pool_kernels=[75, 115, 155]):
         super(MultiScalePooling, self).__init__()
         # 为每个尺度的池化创建一个池化层
         self.pool_layers = nn.ModuleList([
             Pooling1D(pool_size=k)
             for k in pool_kernels
         ])
-        self.conv1x1 = nn.Conv1d(in_channels * len(pool_kernels), in_channels, kernel_size=1, bias=False,groups=1)
     def forward(self, x):
         pooled_outputs = [pool(x) for pool in self.pool_layers]
         # 拼接池化后的结果
@@ -143,23 +142,34 @@ class RMSfusion(nn.Module):
 class EAEEG_Encoder(nn.Module):
     def __init__(
         self,
-        middle_channel=47,
+        chans = 22,
         multiple=9,
         pool_kernels=[50, 100, 250],
+        dataset = '2a',
     ):
         super().__init__()
-        self.pool = MultiScalePooling(in_channels=middle_channel)
-        self.conv = Conv(in_channels=22, out_channels=multiple,kernel_size=75)
-        self.conv1 = Conv1(in_channels=198, out_channels=middle_channel,kernel_size=1)
+        self.dataset = dataset
+        if self.dataset == '2a':
+            self.conv = Conv(in_channels=chans, out_channels=multiple, kernel_size=75)
+            self.conv1 = Conv1(in_channels=chans*multiple, out_channels=46, kernel_size=1)
+        elif self.dataset == '2b':
+            self.conv = Conv(in_channels=chans, out_channels=multiple, kernel_size=75)
+            self.conv1 = Conv1(in_channels=chans*multiple, out_channels=11, kernel_size=1)
+
+        self.pool = MultiScalePooling()
         self.GeMP1D =GeMP1D(num_channels=198)
         self.fftmix = RMSfusion(kernel_sizes=pool_kernels)
+
     def forward(self, x):
         # 数据预处理和归一化
         x = self.conv(x)
         out_mean = torch.mean(x, 2, True)
         out_var = torch.mean(x ** 2, 2, True)
         x = (x - out_mean) / torch.sqrt(out_var + 1e-5)
-        x = self.GeMP1D(x)
+        if self.dataset == '2a':
+            x = self.GeMP1D(x)
+        elif self.dataset == '2b':
+            x = x.clone()
         # 特征提取
         x = self.conv1(x)
         x,x1,x2 = self.pool(x)
@@ -184,14 +194,15 @@ class EAEEG(nn.Module):
         chans,           # 输入信号的通道数（如EEG信号的电极数）
         samples,         # 输入信号的采样点数（如EEG每个通道的时间点数）
         multiple = 9,
-        middle_channel = 47,
         num_classes=4,
+        dataset = '2a',
         pool_kernels=[50, 100, 200],  # 池化层的核大小列表
     ):
         super().__init__()
         # 创建编码器（Efficient_Encoder），用于提取特征
         self.encoder = EAEEG_Encoder(
-            middle_channel=middle_channel,
+            chans = chans,
+            dataset = dataset,
             multiple=multiple,
             pool_kernels=pool_kernels,
         )
@@ -226,10 +237,10 @@ class EAEEG(nn.Module):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # a simple test
-    model = EAEEG(chans=22, samples=1000, num_classes=4,middle_channel = 47)
+    model = EAEEG(chans=3, samples=1000, num_classes=2,dataset = '2b')
     model = model.to(device)
-    inp = torch.rand(10, 22, 1000).to(device)
+    inp = torch.rand(10, 3, 1000).to(device)
     out = model(inp).to(device)
     # Print the number of trainable parameters
-    summary(model, (22, 1000))
+    summary(model, (3, 1000))
     print(out.shape)
