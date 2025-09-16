@@ -73,7 +73,7 @@ class ExP():
         self.criterion_l2 = torch.nn.MSELoss().cuda()
         self.criterion_cls = torch.nn.CrossEntropyLoss().cuda()
 
-        self.model = EDPNet(chans=22, samples=1000, num_classes=4)
+        self.model = EAEEG(chans=22, samples=1000, num_classes=4)
         self.model = nn.DataParallel(self.model, device_ids=[i for i in range(len(gpus))])
         self.model = self.model.cuda()
 
@@ -432,3 +432,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
