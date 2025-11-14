@@ -6,17 +6,19 @@ No early stop:
   
 With early stopping at 180 iterations, the accuracy on both datasets decreases slightly.
 
-See "Miao, Yutao, et al. "EA–EEG: a novel model for efficient motor imagery EEG classification with whitening and multi-scale feature integration." Cognitive Neurodynamics 19.1 (2025): 94."
+See 
 
-If you are referencing my paper, please copy BIBtex 
+    Miao, Yutao, et al. "EA–EEG: a novel model for efficient motor imagery EEG classification with whitening and multi-scale feature integration." Cognitive Neurodynamics 19.1 (2025): 94.
 
-"@article{miao2025ea,
-  title={EA--EEG: a novel model for efficient motor imagery EEG classification with whitening and multi-scale feature integration},
-  author={Miao, Yutao and Li, Kaijie and Zhao, Wenhao and Zhang, Yushi},
-  journal={Cognitive Neurodynamics},
-  volume={19},
-  number={1},
-  pages={94},
-  year={2025},
-  publisher={Springer}
-}"
+If you are referencing my paper, please copy BIBtex below
+
+    @article{miao2025ea,
+      title={EA--EEG: a novel model for efficient motor imagery EEG classification with whitening and multi-scale feature integration},
+      author={Miao, Yutao and Li, Kaijie and Zhao, Wenhao and Zhang, Yushi},
+      journal={Cognitive Neurodynamics},
+      volume={19},
+      number={1},
+      pages={94},
+      year={2025},
+      publisher={Springer}
+    }
